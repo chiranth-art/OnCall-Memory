@@ -3,25 +3,25 @@
 memory.py
 OnCall Memory - Hindsight Cloud Integration
 
-Functions:
-    save_incident(incident)       -> Store an incident
+Hindsight memory operations:
+    save_incident(incident)          -> Store an incident
     save_outcome(incident_id, outcome) -> Store resolution feedback
-    find_similar(error_text)      -> Recall similar incidents
-    learned_patterns(question)    -> Learn patterns from past incidents
+    find_similar(error_text)         -> Recall similar incidents
+    learned_patterns(question)       -> Reflect on past incidents
 """
 
 import os
 import time
-from typing import Any
+from typing import Any, Callable
 
 import certifi
 from dotenv import load_dotenv
 from hindsight_client import Hindsight
 
 
-# --------------------------------------------------
+# ==================================================
 # 1. ENVIRONMENT CONFIGURATION
-# --------------------------------------------------
+# ==================================================
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -30,7 +30,7 @@ load_dotenv(
     override=True
 )
 
-# Use certifi certificates for secure HTTPS connections
+# Secure HTTPS certificate configuration
 os.environ.setdefault("SSL_CERT_FILE", certifi.where())
 os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
 
@@ -48,23 +48,36 @@ if not API_KEY:
         "HINDSIGHT_API_KEY is missing. Check your .env file."
     )
 
-# Create Hindsight client
+
+# ==================================================
+# 2. HINDSIGHT CLIENT
+# ==================================================
+
 client_kwargs: dict[str, Any] = {
     "base_url": BASE_URL,
     "api_key": API_KEY
 }
 
+# One shared client for all memory operations
 client = Hindsight(**client_kwargs)
 
 
-# --------------------------------------------------
-# 2. RETRY FUNCTION
-# --------------------------------------------------
+# ==================================================
+# 3. RETRY FUNCTION
+# ==================================================
 
-def _retry(fn, attempts=3, delay=1.5):
-    """Retry an operation if a temporary error occurs."""
 
-    last_error = None
+def _retry(
+    fn: Callable,
+    attempts: int = 3,
+    delay: float = 1.5
+):
+    """Retry an operation when a temporary error occurs."""
+
+    if attempts < 1:
+        raise ValueError("Attempts must be at least 1.")
+
+    last_error: Exception | None = None
 
     for attempt in range(attempts):
         try:
@@ -83,15 +96,43 @@ def _retry(fn, attempts=3, delay=1.5):
     if last_error is not None:
         raise last_error
 
-    raise RuntimeError("Operation failed.")
+    raise RuntimeError("Operation failed without an exception.")
 
 
-# --------------------------------------------------
-# 3. SAVE INCIDENT
-# --------------------------------------------------
+
+# ==================================================
+# 4. SAVE INCIDENT
+# ==================================================
 
 def save_incident(incident: dict):
-    """Store an incident and its resolution details."""
+    """Validate and store an incident in Hindsight."""
+
+    if not isinstance(incident, dict):
+        raise TypeError(
+            "Incident must be provided as a dictionary."
+        )
+
+    required_fields = [
+        "id",
+        "date",
+        "service",
+        "symptoms",
+        "root_cause",
+        "fix_worked",
+        "fixes_failed",
+        "minutes_to_resolve"
+    ]
+
+    missing_fields = [
+        field
+        for field in required_fields
+        if field not in incident
+    ]
+
+    if missing_fields:
+        raise ValueError(
+            f"Missing incident fields: {', '.join(missing_fields)}"
+        )
 
     content = f"""
 Incident ID: {incident['id']}
@@ -112,16 +153,26 @@ Minutes to Resolve: {incident['minutes_to_resolve']}
     )
 
 
-# --------------------------------------------------
-# 4. SAVE OUTCOME
-# --------------------------------------------------
+# ==================================================
+# 5. SAVE RESOLUTION OUTCOME
+# ==================================================
 
 def save_outcome(incident_id: str, outcome: str):
-    """Remember whether a resolution worked or failed."""
+    """Validate and store incident resolution feedback."""
+
+    if not isinstance(incident_id, str) or not incident_id.strip():
+        raise ValueError(
+            "Incident ID must be a non-empty string."
+        )
+
+    if not isinstance(outcome, str) or not outcome.strip():
+        raise ValueError(
+            "Outcome must be a non-empty string."
+        )
 
     content = f"""
-Incident ID: {incident_id}
-Resolution Outcome: {outcome}
+Incident ID: {incident_id.strip()}
+Resolution Outcome: {outcome.strip()}
 """
 
     return _retry(
@@ -132,17 +183,31 @@ Resolution Outcome: {outcome}
     )
 
 
-# --------------------------------------------------
-# 5. FIND SIMILAR INCIDENTS
-# --------------------------------------------------
+# ==================================================
+# 6. FIND SIMILAR INCIDENTS
+# ==================================================
 
 def find_similar(error_text: str, limit: int = 5):
-    """Retrieve memories related to a new error."""
+    """Retrieve relevant past incidents from Hindsight."""
+
+    if not isinstance(error_text, str) or not error_text.strip():
+        raise ValueError(
+            "Error description must be a non-empty string."
+        )
+
+    if (
+        not isinstance(limit, int)
+        or isinstance(limit, bool)
+        or limit < 1
+    ):
+        raise ValueError(
+            "Limit must be a positive integer."
+        )
 
     results = _retry(
         lambda: client.recall(
             bank_id=BANK_ID,
-            query=error_text
+            query=error_text.strip()
         )
     )
 
@@ -152,26 +217,41 @@ def find_similar(error_text: str, limit: int = 5):
     ][:limit]
 
 
-# --------------------------------------------------
-# 6. LEARN PATTERNS
-# --------------------------------------------------
+# ==================================================
+# 7. LEARN PATTERNS USING REFLECTION
+# ==================================================
 
 def learned_patterns(question: str):
     """Use Hindsight reflection to identify learned patterns."""
 
+    if not isinstance(question, str) or not question.strip():
+        raise ValueError(
+            "Reflection question must be a non-empty string."
+        )
+
     answer = _retry(
         lambda: client.reflect(
             bank_id=BANK_ID,
-            query=question
+            query=question.strip()
         )
     )
 
     return getattr(answer, "text", None) or str(answer)
 
 
-# --------------------------------------------------
-# 7. CONNECTION TEST
-# --------------------------------------------------
+# ==================================================
+# 8. CLOSE CLIENT
+# ==================================================
+
+def close_client():
+    """Close the shared Hindsight client when the application exits."""
+
+    client.close()
+
+
+# ==================================================
+# 9. CONNECTION AND MEMORY TEST
+# ==================================================
 
 if __name__ == "__main__":
 
@@ -204,18 +284,19 @@ if __name__ == "__main__":
             "minutes_to_resolve": 25
         }
 
-        # Save
+        # STEP 1: SAVE INCIDENT
         print("\nSTEP 1: Saving incident...\n")
 
         save_incident(incident)
 
         print("Incident saved successfully!")
 
-        # Wait for processing
+        # STEP 2: WAIT FOR MEMORY PROCESSING
         print("\nWaiting for Hindsight to process memory...")
+
         time.sleep(8)
 
-        # Recall
+        # STEP 3: RECALL SIMILAR INCIDENTS
         print("\nSTEP 2: RECALLING SIMILAR INCIDENTS\n")
 
         memories = find_similar(
@@ -228,7 +309,7 @@ if __name__ == "__main__":
         else:
             print("No similar incidents found.")
 
-        # Reflect
+        # STEP 4: REFLECT ON PAST INCIDENTS
         print("\nSTEP 3: LEARNING FROM PAST INCIDENTS\n")
 
         patterns = learned_patterns(
@@ -240,9 +321,9 @@ if __name__ == "__main__":
         print("\n========== TEST COMPLETED ==========")
 
     except Exception as error:
-        print(f"\nERROR: {error}")
+        print("\nERROR:", error)
         raise
 
     finally:
-        client.close()
+        close_client()
         print("\nHindsight client closed successfully.")
