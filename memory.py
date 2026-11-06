@@ -1,41 +1,34 @@
-
 """
-memory.py
-OnCall Memory - Hindsight Cloud Integration
+OnCall Memory - Hindsight Cloud with Local Fallback
 
-Hindsight memory operations:
-    save_incident(incident)                    -> Store a past incident
-    save_outcome(incident_id, outcome, worked) -> Store fix feedback
-    find_similar(error_text, limit)            -> Recall relevant memories
-    learned_patterns(question)                  -> Reflect on past incidents
-    close_client()                             -> Close shared client
-
-Improvements:
-    1. Safe retry handling.
-    2. Input validation before Hindsight API calls.
-    3. Exact duplicate memory removal.
-    4. Original incident details preserved.
-    5. Existing public function interfaces maintained.
-    6. Hindsight bank directives applied during reflection.
+Functions:
+    save_incident()
+    save_outcome()
+    find_similar()
+    learned_patterns()
+    close_client()
 """
 
 import os
-import time
-from typing import Any, Callable
+import json
 
 import certifi
 from dotenv import load_dotenv
-from hindsight_client import Hindsight
+
+try:
+    from hindsight_client import Hindsight
+except ImportError:
+    Hindsight = None
 
 
 # ==================================================
-# 1. ENVIRONMENT CONFIGURATION
+# 1. CONFIGURATION
 # ==================================================
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 load_dotenv(
-    dotenv_path=os.path.join(BASE_DIR, ".env"),
+    os.path.join(BASE_DIR, ".env"),
     override=True
 )
 
@@ -51,75 +44,145 @@ BASE_URL = os.getenv(
 
 API_KEY = os.getenv("HINDSIGHT_API_KEY")
 
-if not API_KEY:
-    raise ValueError(
-        "HINDSIGHT_API_KEY is missing. Check your .env file."
-    )
+LOCAL_MEMORY_FILE = os.path.join(
+    BASE_DIR, "local_memory.json"
+)
+
+INCIDENT_FILE = os.path.join(
+    BASE_DIR, "sample_incidents.json"
+)
 
 
 # ==================================================
-# 2. HINDSIGHT CLIENT
+# 2. INITIALIZE HINDSIGHT
 # ==================================================
 
-client_kwargs: dict[str, Any] = {
-    "base_url": BASE_URL,
-    "api_key": API_KEY
-}
+client = None
+hindsight_available = False
 
-client = Hindsight(**client_kwargs)
+
+def initialize_client():
+
+    global client, hindsight_available
+
+    if not API_KEY:
+        print("Hindsight API key missing.")
+        print("Using local memory.")
+        return
+
+    if Hindsight is None:
+        print("Hindsight package not installed.")
+        print("Using local memory.")
+        return
+
+    try:
+        client = Hindsight(
+            base_url=BASE_URL,
+            api_key=API_KEY
+        )
+
+        hindsight_available = True
+
+        print("Hindsight client initialized.")
+
+    except Exception as error:
+
+        client = None
+        hindsight_available = False
+
+        print("Hindsight initialization failed:", error)
+        print("Using local memory.")
+
+
+initialize_client()
 
 
 # ==================================================
-# 3. RETRY FUNCTION
+# 3. LOCAL MEMORY FUNCTIONS
 # ==================================================
 
-def _retry(
-    fn: Callable[[], Any],
-    attempts: int = 3,
-    delay: float = 1.5
-) -> Any:
-    """Retry an operation when a temporary error occurs."""
+def load_local_memory():
 
-    if (
-        not isinstance(attempts, int)
-        or isinstance(attempts, bool)
-        or attempts < 1
-    ):
-        raise ValueError("Attempts must be a positive integer.")
+    if not os.path.exists(LOCAL_MEMORY_FILE):
+        return []
 
-    if (
-        not isinstance(delay, (int, float))
-        or isinstance(delay, bool)
-        or delay < 0
-    ):
-        raise ValueError("Delay must be a non-negative number.")
+    try:
+        with open(
+            LOCAL_MEMORY_FILE,
+            "r",
+            encoding="utf-8"
+        ) as file:
 
-    for attempt in range(attempts):
-        try:
-            return fn()
+            data = json.load(file)
 
-        except Exception:
-            if attempt == attempts - 1:
-                raise
+        if isinstance(data, list):
+            return data
 
-            wait_time = delay * (attempt + 1)
+        print("Invalid local memory format.")
+        return []
 
-            print(
-                f"Attempt {attempt + 1} failed. "
-                f"Retrying in {wait_time} seconds..."
-            )
+    except (OSError, json.JSONDecodeError) as error:
 
-            time.sleep(wait_time)
+        print("Local memory loading error:", error)
+        return []
 
-    raise RuntimeError("Operation failed without an exception.")
+
+def save_local_memory(records):
+
+    with open(
+        LOCAL_MEMORY_FILE,
+        "w",
+        encoding="utf-8"
+    ) as file:
+
+        json.dump(records, file, indent=4)
+
+
+def load_historical_incidents():
+
+    try:
+        with open(
+            INCIDENT_FILE,
+            "r",
+            encoding="utf-8"
+        ) as file:
+
+            data = json.load(file)
+
+        if isinstance(data, list):
+            return data
+
+        print("Historical incident database is invalid.")
+        return []
+
+    except (OSError, json.JSONDecodeError) as error:
+
+        print("Historical database error:", error)
+        return []
+
+
+def disable_hindsight(error):
+
+    global client, hindsight_available
+
+    print("\nHindsight API unavailable:", error)
+    print("Switching to local memory.")
+
+    try:
+        if client is not None:
+            client.close()
+    except Exception:
+        pass
+
+    client = None
+    hindsight_available = False
 
 
 # ==================================================
 # 4. SAVE INCIDENT
 # ==================================================
 
-def save_incident(incident: dict):
-    """Validate and store an incident in Hindsight."""
+def save_incident(incident):
 
     if not isinstance(incident, dict):
         raise TypeError(
@@ -138,47 +201,21 @@ def save_incident(incident: dict):
     ]
 
     missing_fields = [
-        field
-        for field in required_fields
+        field for field in required_fields
         if field not in incident
     ]
 
     if missing_fields:
         raise ValueError(
-            f"Missing incident fields: {', '.join(missing_fields)}"
+            "Missing incident fields: "
+            + ", ".join(missing_fields)
         )
 
-    text_fields = [
-        "id",
-        "date",
-        "service",
-        "symptoms",
-        "root_cause",
-        "fix_worked"
-    ]
+    failed_fixes = incident["fixes_failed"]
 
-    for field in text_fields:
-        if (
-            not isinstance(incident[field], str)
-            or not incident[field].strip()
-        ):
-            raise ValueError(
-                f"Incident field '{field}' must be a non-empty string."
-            )
-
-    failed = incident["fixes_failed"]
-
-    if isinstance(failed, (list, tuple)):
-        failed_text = "; ".join(
-            str(item) for item in failed if str(item).strip()
-        ) or "none recorded"
-
-    elif isinstance(failed, str):
-        failed_text = failed.strip() or "none recorded"
-
-    else:
-        raise TypeError(
-            "fixes_failed must be a string, list, or tuple."
+    if isinstance(failed_fixes, (list, tuple)):
+        failed_fixes = "; ".join(
+            str(item) for item in failed_fixes
         )
 
     content = f"""
@@ -188,18 +225,44 @@ Service: {incident['service']}
 Symptoms: {incident['symptoms']}
 Root Cause: {incident['root_cause']}
 Fix That Worked: {incident['fix_worked']}
-Failed Fixes: {failed_text}
+Failed Fixes: {failed_fixes}
 Minutes to Resolve: {incident['minutes_to_resolve']}
 """
 
-    return _retry(
-        lambda: client.retain(
-            bank_id=BANK_ID,
-            content=content,
-            timestamp=incident["date"],
-            context="incident post-mortem"
+    if hindsight_available:
+
+        try:
+            return client.retain(
+                bank_id=BANK_ID,
+                content=content,
+                timestamp=incident["date"],
+                context="incident post-mortem"
+            )
+
+        except Exception as error:
+            disable_hindsight(error)
+
+    records = load_local_memory()
+
+    # Update an existing local incident instead of duplicating it.
+    records = [
+        record for record in records
+        if not (
+            record.get("type") == "incident"
+            and record.get("data", {}).get("id") == incident["id"]
         )
-    )
+    ]
+
+    records.append({
+        "type": "incident",
+        "data": incident
+    })
+
+    save_local_memory(records)
+
+    print("Incident saved in local memory.")
+
+    return True
 
 
 # ==================================================
@@ -207,21 +270,10 @@ Minutes to Resolve: {incident['minutes_to_resolve']}
 # ==================================================
 
 def save_outcome(
-    incident_id: str,
-    outcome: str,
-    worked: bool | None = None,
-    date: str | None = None
+    incident_id,
+    outcome,
+    worked=None
 ):
-    """Validate and store incident resolution feedback.
-
-    worked:
-        True  -> fix worked
-        False -> fix did not work
-        None  -> result not specified
-
-    date:
-        Optional original incident date.
-    """
 
     if not isinstance(incident_id, str) or not incident_id.strip():
         raise ValueError(
@@ -238,89 +290,45 @@ def save_outcome(
             "worked must be True, False, or None."
         )
 
-    if date is not None:
-        if not isinstance(date, str) or not date.strip():
-            raise ValueError(
-                "date must be a non-empty string or None."
-            )
-
-    if worked is None:
-        status_line = "Result: not specified\n"
-
-    elif worked:
-        status_line = "Result: the fix WORKED\n"
-
-    else:
-        status_line = "Result: the fix did NOT work\n"
-
     content = f"""
-Incident ID: {incident_id.strip()}
-{status_line}Resolution Outcome: {outcome.strip()}
+Incident ID: {incident_id}
+Outcome: {outcome}
+Fix worked: {worked}
 """
 
-    return _retry(
-        lambda: client.retain(
-            bank_id=BANK_ID,
-            content=content,
-            timestamp=date,
-            context="fix outcome feedback"
-        )
-    )
+    if hindsight_available:
+
+        try:
+            return client.retain(
+                bank_id=BANK_ID,
+                content=content,
+                context="fix outcome feedback"
+            )
+
+        except Exception as error:
+            disable_hindsight(error)
+
+    records = load_local_memory()
+
+    records.append({
+        "type": "outcome",
+        "incident_id": incident_id.strip(),
+        "outcome": outcome.strip(),
+        "worked": worked
+    })
+
+    save_local_memory(records)
+
+    print("Outcome saved in local memory.")
+
+    return True
 
 
 # ==================================================
-# 6. MEMORY DEDUPLICATION
+# 6. FIND SIMILAR INCIDENTS
 # ==================================================
 
-def _normalize_memory(text: str) -> str:
-    """
-    Normalize memory text for exact duplicate detection.
-
-    Case and repeated whitespace are ignored.
-    Original memory text is preserved in returned results.
-
-    This does not merge different facts or different fixes.
-    """
-
-    return " ".join(text.casefold().split())
-
-
-def _deduplicate_memories(memories: list[str]) -> list[str]:
-    """Remove exact duplicate memories while preserving order."""
-
-    unique_memories = []
-    seen = set()
-
-    for memory in memories:
-
-        if not isinstance(memory, str) or not memory.strip():
-            continue
-
-        normalized = _normalize_memory(memory)
-
-        if normalized in seen:
-            continue
-
-        seen.add(normalized)
-        unique_memories.append(memory.strip())
-
-    return unique_memories
-
-
-# ==================================================
-# 7. FIND SIMILAR INCIDENTS
-# ==================================================
-
-def find_similar(error_text: str, limit: int = 5):
-    """
-    Retrieve relevant memories from Hindsight.
-
-    Exact duplicate memories are removed before returning results.
-
-    Different memories from the same incident are preserved because
-    they may contain separate root causes, successful fixes, or
-    failed troubleshooting attempts.
-    """
+def find_similar(error_text, limit=5):
 
     if not isinstance(error_text, str) or not error_text.strip():
         raise ValueError(
@@ -336,97 +344,202 @@ def find_similar(error_text: str, limit: int = 5):
             "Limit must be a positive integer."
         )
 
-    results = _retry(
-        lambda: client.recall(
-            bank_id=BANK_ID,
-            query=error_text.strip()
-        )
-    )
+    if hindsight_available:
 
-    raw_memories = [
-        result.text
-        for result in results.results
-        if getattr(result, "text", None)
+        try:
+            results = client.recall(
+                bank_id=BANK_ID,
+                query=error_text.strip()
+            )
+
+            return [
+                result.text
+                for result in results.results
+            ][:limit]
+
+        except Exception as error:
+            disable_hindsight(error)
+
+    # LOCAL FALLBACK
+
+    historical = load_historical_incidents()
+    local_records = load_local_memory()
+
+    local_incidents = [
+        record["data"]
+        for record in local_records
+        if (
+            isinstance(record, dict)
+            and record.get("type") == "incident"
+            and isinstance(record.get("data"), dict)
+        )
     ]
 
-    unique_memories = _deduplicate_memories(raw_memories)
+    incidents = historical + local_incidents
 
-    return unique_memories[:limit]
+    query_words = set(error_text.lower().split())
+
+    scored = []
+
+    for incident in incidents:
+
+        if not isinstance(incident, dict):
+            continue
+
+        searchable = " ".join(
+            str(value)
+            for value in incident.values()
+        ).lower()
+
+        incident_words = set(searchable.split())
+
+        score = len(query_words.intersection(incident_words))
+
+        if score > 0:
+            scored.append((score, incident))
+
+    scored.sort(
+        key=lambda item: item[0],
+        reverse=True
+    )
+
+    return [
+        json.dumps(incident, indent=4)
+        for score, incident in scored[:limit]
+    ]
 
 
 # ==================================================
-# 8. LEARN PATTERNS USING REFLECTION
+# 7. LEARN PATTERNS
 # ==================================================
 
-def learned_patterns(question: str):
-    """
-    Use Hindsight reflection to identify learned patterns.
-
-    apply_all_directives=True ensures that all active bank
-    directives are applied during this reflection request.
-    """
+def learned_patterns(question):
 
     if not isinstance(question, str) or not question.strip():
         raise ValueError(
             "Reflection question must be a non-empty string."
         )
 
-    answer = _retry(
-        lambda: client.reflect(
-            bank_id=BANK_ID,
-            query=question.strip(),
-            apply_all_directives=True
-        )
-    )
+    if hindsight_available:
 
-    return getattr(answer, "text", None) or str(answer)
+        try:
+            answer = client.reflect(
+                bank_id=BANK_ID,
+                query=question.strip()
+            )
+
+            return (
+                getattr(answer, "text", None)
+                or str(answer)
+            )
+
+        except Exception as error:
+            disable_hindsight(error)
+
+    # LOCAL PATTERN LEARNING
+
+    incidents = load_historical_incidents()
+
+    local_records = load_local_memory()
+
+    local_incidents = [
+        record["data"]
+        for record in local_records
+        if (
+            isinstance(record, dict)
+            and record.get("type") == "incident"
+            and isinstance(record.get("data"), dict)
+        )
+    ]
+
+    incidents.extend(local_incidents)
+
+    if not incidents:
+        return "No historical incidents are available."
+
+    patterns = []
+
+    for incident in incidents:
+
+        patterns.append(
+            f"""
+Incident: {incident.get('id', 'Unknown')}
+Service: {incident.get('service', 'Unknown')}
+Root Cause: {incident.get('root_cause', 'Not recorded')}
+Successful Fix: {incident.get('fix_worked', 'Not recorded')}
+Failed Fixes: {incident.get('fixes_failed', 'Not recorded')}
+"""
+        )
+
+    return "\n".join(patterns)
 
 
 # ==================================================
-# 9. CLOSE CLIENT
+# 8. CLOSE CLIENT
 # ==================================================
 
 def close_client():
-    """Close the shared Hindsight client."""
 
-    client.close()
+    global client, hindsight_available
+
+    if client is not None:
+
+        try:
+            client.close()
+
+        except Exception as error:
+            print("Client closing error:", error)
+
+    client = None
+    hindsight_available = False
 
 
 # ==================================================
-# 10. SAFE DIRECT TEST
+# 9. TEST
 # ==================================================
 
 if __name__ == "__main__":
 
     try:
+
         print("\n========== ONCALL MEMORY ==========\n")
 
-        print("Hindsight URL:", BASE_URL)
-        print("Bank ID:", BANK_ID)
-        print("API Key Loaded:", bool(API_KEY))
+        print(
+            "Memory mode:",
+            "Hindsight" if hindsight_available else "Local"
+        )
 
-        # This test only retrieves existing memories.
-        # It does NOT save another incident.
+        incident = {
+            "id": "TEST-001",
+            "date": "2026-11-06T10:00:00Z",
+            "service": "payment-service",
+            "symptoms": "Database connection timeout",
+            "root_cause": "Database connection pool exhausted",
+            "fix_worked": "Increased connection pool size",
+            "fixes_failed": ["Restarting the service"],
+            "minutes_to_resolve": 25
+        }
 
-        print("\nSTEP 1: RECALLING SIMILAR INCIDENTS\n")
+        print("\nSTEP 1: Saving incident...")
+
+        save_incident(incident)
+
+        print("\nSTEP 2: Finding similar incidents...")
 
         memories = find_similar(
-            "database connection timeout on payment service",
-            limit=5
+            "database connection timeout"
         )
 
         if memories:
-            for index, memory in enumerate(memories, start=1):
-                print(f"\nMEMORY {index}")
-                print("-" * 50)
-                print(memory)
+            for memory in memories:
+                print("\n", memory)
         else:
             print("No similar incidents found.")
 
-        print("\nSTEP 2: LEARNING FROM PAST INCIDENTS\n")
+        print("\nSTEP 3: Learning patterns...")
 
         patterns = learned_patterns(
-            "What fixed database connection timeouts before?"
+            "What fixed database connection timeouts?"
         )
 
         print(patterns)
@@ -434,9 +547,11 @@ if __name__ == "__main__":
         print("\n========== TEST COMPLETED ==========")
 
     except Exception as error:
-        print("\nERROR:", error)
-        raise
+
+        print("\nTEST ERROR:", error)
 
     finally:
+
         close_client()
-        print("\nHindsight client closed successfully.")
+
+        print("\nMemory client closed.")
