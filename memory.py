@@ -1,16 +1,21 @@
+
 """
 memory.py
 OnCall Memory - Hindsight Cloud Integration
 
 Hindsight memory operations:
     save_incident(incident)                    -> Store a past incident
-    save_outcome(incident_id, outcome, worked) -> Store "fix worked / failed" feedback
-    find_similar(error_text, limit)            -> Recall similar incidents
-    learned_patterns(question)                 -> Reflect on past incidents
-    close_client()                             -> Close the shared client
+    save_outcome(incident_id, outcome, worked) -> Store fix feedback
+    find_similar(error_text, limit)            -> Recall relevant memories
+    learned_patterns(question)                  -> Reflect on past incidents
+    close_client()                             -> Close shared client
 
-All inputs are validated BEFORE calling Hindsight, so bad input raises
-TypeError / ValueError immediately and uses none of your credits.
+Improvements:
+    1. Safe retry handling.
+    2. Input validation before Hindsight API calls.
+    3. Exact duplicate memory removal.
+    4. Original incident details preserved.
+    5. Existing public function interfaces maintained.
 """
 
 import os
@@ -33,7 +38,6 @@ load_dotenv(
     override=True
 )
 
-# Secure HTTPS certificate configuration
 os.environ.setdefault("SSL_CERT_FILE", certifi.where())
 os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
 
@@ -61,7 +65,6 @@ client_kwargs: dict[str, Any] = {
     "api_key": API_KEY
 }
 
-# One shared client for all memory operations
 client = Hindsight(**client_kwargs)
 
 
@@ -70,33 +73,42 @@ client = Hindsight(**client_kwargs)
 # ==================================================
 
 def _retry(
-    fn: Callable,
+    fn: Callable[[], Any],
     attempts: int = 3,
     delay: float = 1.5
-):
+) -> Any:
     """Retry an operation when a temporary error occurs."""
 
-    if attempts < 1:
-        raise ValueError("Attempts must be at least 1.")
+    if (
+        not isinstance(attempts, int)
+        or isinstance(attempts, bool)
+        or attempts < 1
+    ):
+        raise ValueError("Attempts must be a positive integer.")
 
-    last_error: Exception | None = None
+    if (
+        not isinstance(delay, (int, float))
+        or isinstance(delay, bool)
+        or delay < 0
+    ):
+        raise ValueError("Delay must be a non-negative number.")
 
     for attempt in range(attempts):
         try:
             return fn()
 
-        except Exception as error:
-            last_error = error
+        except Exception:
+            if attempt == attempts - 1:
+                raise
 
-            if attempt < attempts - 1:
-                print(
-                    f"Attempt {attempt + 1} failed. "
-                    f"Retrying in {delay} seconds..."
-                )
-                time.sleep(delay)
+            wait_time = delay * (attempt + 1)
 
-    if last_error is not None:
-        raise last_error
+            print(
+                f"Attempt {attempt + 1} failed. "
+                f"Retrying in {wait_time} seconds..."
+            )
+
+            time.sleep(wait_time)
 
     raise RuntimeError("Operation failed without an exception.")
 
@@ -135,13 +147,40 @@ def save_incident(incident: dict):
             f"Missing incident fields: {', '.join(missing_fields)}"
         )
 
-    # fixes_failed can be a list or a single string
+    # Validate important text fields.
+    text_fields = [
+        "id",
+        "date",
+        "service",
+        "symptoms",
+        "root_cause",
+        "fix_worked"
+    ]
+
+    for field in text_fields:
+        if (
+            not isinstance(incident[field], str)
+            or not incident[field].strip()
+        ):
+            raise ValueError(
+                f"Incident field '{field}' must be a non-empty string."
+            )
+
+    # Validate failed fixes.
     failed = incident["fixes_failed"]
 
     if isinstance(failed, (list, tuple)):
-        failed_text = "; ".join(str(item) for item in failed) or "none recorded"
+        failed_text = "; ".join(
+            str(item) for item in failed if str(item).strip()
+        ) or "none recorded"
+
+    elif isinstance(failed, str):
+        failed_text = failed.strip() or "none recorded"
+
     else:
-        failed_text = str(failed) or "none recorded"
+        raise TypeError(
+            "fixes_failed must be a string, list, or tuple."
+        )
 
     content = f"""
 Incident ID: {incident['id']}
@@ -171,14 +210,18 @@ Minutes to Resolve: {incident['minutes_to_resolve']}
 def save_outcome(
     incident_id: str,
     outcome: str,
-    worked: bool | None = None
+    worked: bool | None = None,
+    date: str | None = None
 ):
     """Validate and store incident resolution feedback.
 
     worked:
-        True  -> the fix worked
-        False -> the fix did NOT work
-        None  -> not specified (keeps older calls working)
+        True  -> fix worked
+        False -> fix did not work
+        None  -> result not specified
+
+    date:
+        Optional original incident date.
     """
 
     if not isinstance(incident_id, str) or not incident_id.strip():
@@ -196,10 +239,18 @@ def save_outcome(
             "worked must be True, False, or None."
         )
 
+    if date is not None:
+        if not isinstance(date, str) or not date.strip():
+            raise ValueError(
+                "date must be a non-empty string or None."
+            )
+
     if worked is None:
-        status_line = ""
+        status_line = "Result: not specified\n"
+
     elif worked:
         status_line = "Result: the fix WORKED\n"
+
     else:
         status_line = "Result: the fix did NOT work\n"
 
@@ -212,17 +263,65 @@ Incident ID: {incident_id.strip()}
         lambda: client.retain(
             bank_id=BANK_ID,
             content=content,
+            timestamp=date,
             context="fix outcome feedback"
         )
     )
 
 
 # ==================================================
-# 6. FIND SIMILAR INCIDENTS
+# 6. MEMORY DEDUPLICATION
+# ==================================================
+
+def _normalize_memory(text: str) -> str:
+    """
+    Normalize memory text for exact duplicate detection.
+
+    Case and repeated whitespace are ignored.
+    Original memory text is preserved in the returned results.
+
+    This does not merge different facts or different fixes.
+    """
+
+    return " ".join(text.casefold().split())
+
+
+def _deduplicate_memories(memories: list[str]) -> list[str]:
+    """Remove exact duplicate memories while preserving order."""
+
+    unique_memories = []
+    seen = set()
+
+    for memory in memories:
+
+        if not isinstance(memory, str) or not memory.strip():
+            continue
+
+        normalized = _normalize_memory(memory)
+
+        if normalized in seen:
+            continue
+
+        seen.add(normalized)
+        unique_memories.append(memory.strip())
+
+    return unique_memories
+
+
+# ==================================================
+# 7. FIND SIMILAR INCIDENTS
 # ==================================================
 
 def find_similar(error_text: str, limit: int = 5):
-    """Retrieve relevant past incidents from Hindsight."""
+    """
+    Retrieve relevant memories from Hindsight.
+
+    Exact duplicate memories are removed before returning results.
+
+    Different memories from the same incident are preserved because
+    they may contain separate root causes, successful fixes, or
+    failed troubleshooting attempts.
+    """
 
     if not isinstance(error_text, str) or not error_text.strip():
         raise ValueError(
@@ -245,14 +344,19 @@ def find_similar(error_text: str, limit: int = 5):
         )
     )
 
-    return [
+    raw_memories = [
         result.text
         for result in results.results
-    ][:limit]
+        if getattr(result, "text", None)
+    ]
+
+    unique_memories = _deduplicate_memories(raw_memories)
+
+    return unique_memories[:limit]
 
 
 # ==================================================
-# 7. LEARN PATTERNS USING REFLECTION
+# 8. LEARN PATTERNS USING REFLECTION
 # ==================================================
 
 def learned_patterns(question: str):
@@ -274,17 +378,17 @@ def learned_patterns(question: str):
 
 
 # ==================================================
-# 8. CLOSE CLIENT
+# 9. CLOSE CLIENT
 # ==================================================
 
 def close_client():
-    """Close the shared Hindsight client when the application exits."""
+    """Close the shared Hindsight client."""
 
     client.close()
 
 
 # ==================================================
-# 9. CONNECTION AND MEMORY TEST
+# 10. SAFE DIRECT TEST
 # ==================================================
 
 if __name__ == "__main__":
@@ -296,55 +400,25 @@ if __name__ == "__main__":
         print("Bank ID:", BANK_ID)
         print("API Key Loaded:", bool(API_KEY))
 
-        incident = {
-            "id": "INC-001",
-            "date": "2026-08-12T21:10:00Z",
-            "service": "payment-service",
-            "symptoms": (
-                "Orders failing with database connection "
-                "timeout after a traffic spike"
-            ),
-            "root_cause": (
-                "Database connection pool exhausted "
-                "(limit 50)"
-            ),
-            "fix_worked": (
-                "Raised connection pool size from 50 to 200"
-            ),
-            "fixes_failed": [
-                "Restarted payment-service "
-                "(issue returned in 10 minutes)"
-            ],
-            "minutes_to_resolve": 25
-        }
+        # This test only retrieves existing memories.
+        # It does NOT save another incident.
 
-        # STEP 1: SAVE INCIDENT
-        print("\nSTEP 1: Saving incident...\n")
-
-        save_incident(incident)
-
-        print("Incident saved successfully!")
-
-        # STEP 2: WAIT FOR MEMORY PROCESSING
-        print("\nWaiting for Hindsight to process memory...")
-
-        time.sleep(8)
-
-        # STEP 3: RECALL SIMILAR INCIDENTS
-        print("\nSTEP 2: RECALLING SIMILAR INCIDENTS\n")
+        print("\nSTEP 1: RECALLING SIMILAR INCIDENTS\n")
 
         memories = find_similar(
-            "database connection timeout on payment service"
+            "database connection timeout on payment service",
+            limit=5
         )
 
         if memories:
-            for memory in memories:
-                print("-", memory)
+            for index, memory in enumerate(memories, start=1):
+                print(f"\nMEMORY {index}")
+                print("-" * 50)
+                print(memory)
         else:
             print("No similar incidents found.")
 
-        # STEP 4: REFLECT ON PAST INCIDENTS
-        print("\nSTEP 3: LEARNING FROM PAST INCIDENTS\n")
+        print("\nSTEP 2: LEARNING FROM PAST INCIDENTS\n")
 
         patterns = learned_patterns(
             "What fixed database connection timeouts before?"

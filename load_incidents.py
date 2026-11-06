@@ -203,6 +203,9 @@ OUTCOMES = [
 ]
 
 
+INCIDENT_DATES = {incident["id"]: incident["date"] for incident in INCIDENTS}
+
+
 def main():
     force = "--force" in sys.argv
 
@@ -226,7 +229,7 @@ def main():
     print(f"\nLoading {len(OUTCOMES)} outcome feedback entries...\n")
     for incident_id, outcome, worked in OUTCOMES:
         try:
-            save_outcome(incident_id, outcome, worked=worked)
+            save_outcome(incident_id, outcome, worked=worked, date=INCIDENT_DATES[incident_id])
             saved += 1
             print(f"  saved outcome for {incident_id}")
         except Exception as error:
