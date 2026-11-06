@@ -1,13 +1,16 @@
-
 """
 memory.py
 OnCall Memory - Hindsight Cloud Integration
 
 Hindsight memory operations:
-    save_incident(incident)          -> Store an incident
-    save_outcome(incident_id, outcome) -> Store resolution feedback
-    find_similar(error_text)         -> Recall similar incidents
-    learned_patterns(question)       -> Reflect on past incidents
+    save_incident(incident)                    -> Store a past incident
+    save_outcome(incident_id, outcome, worked) -> Store "fix worked / failed" feedback
+    find_similar(error_text, limit)            -> Recall similar incidents
+    learned_patterns(question)                 -> Reflect on past incidents
+    close_client()                             -> Close the shared client
+
+All inputs are validated BEFORE calling Hindsight, so bad input raises
+TypeError / ValueError immediately and uses none of your credits.
 """
 
 import os
@@ -66,7 +69,6 @@ client = Hindsight(**client_kwargs)
 # 3. RETRY FUNCTION
 # ==================================================
 
-
 def _retry(
     fn: Callable,
     attempts: int = 3,
@@ -97,7 +99,6 @@ def _retry(
         raise last_error
 
     raise RuntimeError("Operation failed without an exception.")
-
 
 
 # ==================================================
@@ -134,6 +135,14 @@ def save_incident(incident: dict):
             f"Missing incident fields: {', '.join(missing_fields)}"
         )
 
+    # fixes_failed can be a list or a single string
+    failed = incident["fixes_failed"]
+
+    if isinstance(failed, (list, tuple)):
+        failed_text = "; ".join(str(item) for item in failed) or "none recorded"
+    else:
+        failed_text = str(failed) or "none recorded"
+
     content = f"""
 Incident ID: {incident['id']}
 Date: {incident['date']}
@@ -141,14 +150,16 @@ Service: {incident['service']}
 Symptoms: {incident['symptoms']}
 Root Cause: {incident['root_cause']}
 Fix That Worked: {incident['fix_worked']}
-Failed Fixes: {incident['fixes_failed']}
+Failed Fixes: {failed_text}
 Minutes to Resolve: {incident['minutes_to_resolve']}
 """
 
     return _retry(
         lambda: client.retain(
             bank_id=BANK_ID,
-            content=content
+            content=content,
+            timestamp=incident["date"],
+            context="incident post-mortem"
         )
     )
 
@@ -157,8 +168,18 @@ Minutes to Resolve: {incident['minutes_to_resolve']}
 # 5. SAVE RESOLUTION OUTCOME
 # ==================================================
 
-def save_outcome(incident_id: str, outcome: str):
-    """Validate and store incident resolution feedback."""
+def save_outcome(
+    incident_id: str,
+    outcome: str,
+    worked: bool | None = None
+):
+    """Validate and store incident resolution feedback.
+
+    worked:
+        True  -> the fix worked
+        False -> the fix did NOT work
+        None  -> not specified (keeps older calls working)
+    """
 
     if not isinstance(incident_id, str) or not incident_id.strip():
         raise ValueError(
@@ -170,15 +191,28 @@ def save_outcome(incident_id: str, outcome: str):
             "Outcome must be a non-empty string."
         )
 
+    if worked is not None and not isinstance(worked, bool):
+        raise TypeError(
+            "worked must be True, False, or None."
+        )
+
+    if worked is None:
+        status_line = ""
+    elif worked:
+        status_line = "Result: the fix WORKED\n"
+    else:
+        status_line = "Result: the fix did NOT work\n"
+
     content = f"""
 Incident ID: {incident_id.strip()}
-Resolution Outcome: {outcome.strip()}
+{status_line}Resolution Outcome: {outcome.strip()}
 """
 
     return _retry(
         lambda: client.retain(
             bank_id=BANK_ID,
-            content=content
+            content=content,
+            context="fix outcome feedback"
         )
     )
 
