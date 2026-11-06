@@ -16,6 +16,7 @@ Improvements:
     3. Exact duplicate memory removal.
     4. Original incident details preserved.
     5. Existing public function interfaces maintained.
+    6. Hindsight bank directives applied during reflection.
 """
 
 import os
@@ -147,7 +148,6 @@ def save_incident(incident: dict):
             f"Missing incident fields: {', '.join(missing_fields)}"
         )
 
-    # Validate important text fields.
     text_fields = [
         "id",
         "date",
@@ -166,7 +166,6 @@ def save_incident(incident: dict):
                 f"Incident field '{field}' must be a non-empty string."
             )
 
-    # Validate failed fixes.
     failed = incident["fixes_failed"]
 
     if isinstance(failed, (list, tuple)):
@@ -278,7 +277,7 @@ def _normalize_memory(text: str) -> str:
     Normalize memory text for exact duplicate detection.
 
     Case and repeated whitespace are ignored.
-    Original memory text is preserved in the returned results.
+    Original memory text is preserved in returned results.
 
     This does not merge different facts or different fixes.
     """
@@ -360,7 +359,12 @@ def find_similar(error_text: str, limit: int = 5):
 # ==================================================
 
 def learned_patterns(question: str):
-    """Use Hindsight reflection to identify learned patterns."""
+    """
+    Use Hindsight reflection to identify learned patterns.
+
+    apply_all_directives=True ensures that all active bank
+    directives are applied during this reflection request.
+    """
 
     if not isinstance(question, str) or not question.strip():
         raise ValueError(
@@ -370,7 +374,8 @@ def learned_patterns(question: str):
     answer = _retry(
         lambda: client.reflect(
             bank_id=BANK_ID,
-            query=question.strip()
+            query=question.strip(),
+            apply_all_directives=True
         )
     )
 
