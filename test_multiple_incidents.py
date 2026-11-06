@@ -1,12 +1,13 @@
 
 import time
 
+
 from memory import (
     save_incident,
     save_outcome,
     find_similar,
     learned_patterns,
-    client
+    close_client
 )
 
 
@@ -86,5 +87,5 @@ except Exception as error:
     raise
 
 finally:
-    client.close()
+    close_client()
     print("\nHindsight client closed successfully.")
