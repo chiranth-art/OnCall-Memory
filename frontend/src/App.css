@@ -1717,3 +1717,84 @@ button:disabled {
     align-items: flex-start;
   }
 }
+.markdown-report {
+  color: #cbd5e1;
+  line-height: 1.8;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.markdown-report h1,
+.markdown-report h2,
+.markdown-report h3 {
+  color: #c4b5fd;
+  margin: 24px 0 12px;
+}
+
+.markdown-report h1 {
+  font-size: 22px;
+}
+
+.markdown-report h2 {
+  font-size: 19px;
+}
+
+.markdown-report h3 {
+  font-size: 16px;
+}
+
+.markdown-report p {
+  margin: 10px 0;
+}
+
+.markdown-report ul,
+.markdown-report ol {
+  padding-left: 24px;
+  margin: 12px 0;
+}
+
+.markdown-report li {
+  margin: 8px 0;
+}
+
+.markdown-report table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  display: block;
+  overflow-x: auto;
+}
+
+.markdown-report th,
+.markdown-report td {
+  border: 1px solid #343449;
+  padding: 10px;
+  text-align: left;
+  min-width: 120px;
+}
+
+.markdown-report th {
+  background: #242033;
+  color: #c4b5fd;
+}
+
+.markdown-report tr:nth-child(even) {
+  background: #171724;
+}
+
+.markdown-report code {
+  background: #27243a;
+  color: #c4b5fd;
+  padding: 2px 5px;
+  border-radius: 4px;
+}
+
+.markdown-report hr {
+  border: 0;
+  border-top: 1px solid #343449;
+  margin: 24px 0;
+}
+
+.live-analysis-card {
+  padding: 24px;
+}
