@@ -102,7 +102,15 @@ These records illustrate why historical context matters: similar symptoms do not
 | `briefing.py` | Additional briefing implementation in the repository |
 | `test_*.py` | Tests for imports, memory integration, retries, deduplication, reflection, feedback, and incident handling |
 
-## Hindsight integration
+Team Members and Their Roles
+
+- Member 1 – Backend Development: Responsible for developing the core incident-response logic, handling incident processing, and coordinating the application's workflow using agent.py.
+
+- Member 2 – Memory Integration: Responsible for integrating Hindsight to store, retain, and retrieve historical incident data using memory.py.
+
+- Member 3 – AI Integration: Responsible for integrating the Groq API to analyse incidents, identify possible root causes, and generate structured investigation briefings using llm.py.
+
+- Member 4 – Documentation and Presentation: Responsible for preparing the project README, technical article, demo video script, project documentation, and presentation materials.## Hindsight integration
 
 OnCall-Memory uses Hindsight as its long-term memory layer. The integration is implemented in `memory.py`.
 
