@@ -1,0 +1,26 @@
+[
+  {
+    "id": "INC-001",
+    "service": "payment-service",
+    "symptoms": "Database connection timeout after a traffic spike",
+    "root_cause": "Database connection pool exhausted",
+    "fix_worked": "Increased connection pool size from 50 to 200",
+    "fixes_failed": "Restarting the payment service"
+  },
+  {
+    "id": "INC-002",
+    "service": "order-service",
+    "symptoms": "Orders failing because database connections are unavailable",
+    "root_cause": "Database connection limit reached",
+    "fix_worked": "Optimized connection management",
+    "fixes_failed": "Repeated application restarts"
+  },
+  {
+    "id": "INC-003",
+    "service": "notification-service",
+    "symptoms": "Notifications delayed due to message queue overload",
+    "root_cause": "Message queue backlog",
+    "fix_worked": "Increased queue processing workers",
+    "fixes_failed": "Restarting the notification service"
+  }
+]
