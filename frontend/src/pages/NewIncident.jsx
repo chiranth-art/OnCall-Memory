@@ -1,54 +1,34 @@
 
 import { useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 import {
   AlertTriangle,
   BrainCircuit,
   Search,
-  Clock,
   CheckCircle2,
-  XCircle,
   ShieldAlert,
-  ArrowRight,
   RotateCcw,
-  FileText
 } from "lucide-react";
 
 import { analyzeIncident } from "../services/api";
 
-// Clearly labelled sample result for frontend demonstration
+// Clearly labelled sample data for frontend demonstration
 const demoResult = {
   incident_id: "INC-DEMO-1042",
   severity: "critical",
-
   root_cause: "Database connection pool exhaustion",
-
   explanation:
     "A sudden traffic spike caused the payment service to exceed its configured database connection pool limit.",
-
-  similar_incidents: [
-    {
-      id: "INC-001",
-      service: "payment-service",
-      root_cause: "Database connection pool exhausted",
-      fix_worked: "Increased connection pool size from 50 to 200",
-      fixes_failed: [
-        "Restarting payment service did not permanently resolve the issue"
-      ],
-      minutes_to_resolve: 25
-    }
-  ],
-
   recommendations: [
     "Inspect current database connection utilization.",
     "Verify available database connection capacity.",
     "Review the payment service connection pool configuration.",
     "Consider increasing the pool limit after capacity verification.",
-    "Monitor payment requests after applying the approved fix."
+    "Monitor payment requests after applying the approved fix.",
   ],
-
-  runbook: "Runbook B",
-  confidence: "High"
+  confidence: "High",
 };
 
 export default function NewIncident() {
@@ -75,18 +55,22 @@ export default function NewIncident() {
 
     try {
       const data = await analyzeIncident({
-        error,
+        error: error.trim(),
         service,
         logs,
-        severity
+        severity,
       });
 
-      setResult(data);
+      if (!data || !data.analysis) {
+        throw new Error("The backend did not return an AI analysis.");
+      }
 
+      setResult(data);
     } catch (err) {
       setMessage(
         err.response?.data?.detail ||
-        "Backend unavailable. You can use the clearly labelled demo result while integration is in progress."
+          err.message ||
+          "Unable to analyze the incident. Please check the backend."
       );
     } finally {
       setLoading(false);
@@ -101,21 +85,21 @@ export default function NewIncident() {
 
   const clearForm = () => {
     setError("");
+    setService("payment-service");
     setLogs("");
+    setSeverity("critical");
     setResult(null);
     setMessage("");
     setDemoMode(false);
   };
 
-  const similarIncidents =
-    result?.similar_incidents || [];
-
-  const recommendations =
-    result?.recommendations || [];
+  const liveAnalysis =
+    !demoMode && typeof result?.analysis === "string"
+      ? result.analysis
+      : null;
 
   return (
     <div className="incident-page">
-
       <div className="page-intro">
         <div>
           <span className="section-eyebrow">
@@ -126,23 +110,19 @@ export default function NewIncident() {
           <h2>Investigate an Incident</h2>
 
           <p>
-            Describe a production issue. IncidentIQ
-            will search historical knowledge and
-            help identify possible solutions.
+            Describe a production issue. IncidentIQ will
+            search historical knowledge and help identify
+            possible solutions.
           </p>
         </div>
 
-        <button
-          className="secondary-btn"
-          onClick={clearForm}
-        >
+        <button className="secondary-btn" onClick={clearForm}>
           <RotateCcw size={16} />
           Reset
         </button>
       </div>
 
       <div className="incident-form-card">
-
         <div className="form-heading">
           <div className="form-icon">
             <AlertTriangle size={21} />
@@ -155,7 +135,6 @@ export default function NewIncident() {
         </div>
 
         <div className="form-grid">
-
           <div className="form-group full-width">
             <label>Error Description *</label>
 
@@ -174,29 +153,14 @@ export default function NewIncident() {
               value={service}
               onChange={(e) => setService(e.target.value)}
             >
-              <option value="payment-service">
-                Payment Service
-              </option>
-
+              <option value="payment-service">Payment Service</option>
               <option value="authentication-service">
                 Authentication Service
               </option>
-
-              <option value="order-service">
-                Order Service
-              </option>
-
-              <option value="database">
-                Database
-              </option>
-
-              <option value="redis">
-                Redis Cache
-              </option>
-
-              <option value="api-gateway">
-                API Gateway
-              </option>
+              <option value="order-service">Order Service</option>
+              <option value="database">Database</option>
+              <option value="redis">Redis Cache</option>
+              <option value="api-gateway">API Gateway</option>
             </select>
           </div>
 
@@ -224,11 +188,9 @@ export default function NewIncident() {
               onChange={(e) => setLogs(e.target.value)}
             />
           </div>
-
         </div>
 
         <div className="form-actions">
-
           <button
             className="primary-btn"
             onClick={handleAnalyze}
@@ -247,13 +209,9 @@ export default function NewIncident() {
             )}
           </button>
 
-          <button
-            className="secondary-btn"
-            onClick={loadDemo}
-          >
+          <button className="secondary-btn" onClick={loadDemo}>
             Load Demo Result
           </button>
-
         </div>
 
         {message && (
@@ -262,12 +220,10 @@ export default function NewIncident() {
             {message}
           </div>
         )}
-
       </div>
 
       {result && (
         <div className="analysis-results">
-
           <div className="results-header">
             <div>
               <span className="section-eyebrow">
@@ -278,7 +234,10 @@ export default function NewIncident() {
               <h2>AI Analysis Results</h2>
 
               <p>
-                Incident ID: {result.incident_id || "New Incident"}
+                Incident ID:{" "}
+                {result.incident_id ||
+                  result.incident?.incident_id ||
+                  "New Incident"}
               </p>
             </div>
 
@@ -287,166 +246,99 @@ export default function NewIncident() {
             </span>
           </div>
 
-          <div className="root-cause-card">
-
-            <div className="root-cause-top">
-              <div className="form-icon">
-                <ShieldAlert size={22} />
-              </div>
-
-              <span className="severity critical">
-                {result.severity || severity}
-              </span>
-            </div>
-
-            <span className="result-label">
-              PROBABLE ROOT CAUSE
-            </span>
-
-            <h3>
-              {result.root_cause || "Analysis completed"}
-            </h3>
-
-            <p>
-              {result.explanation || "No explanation returned."}
-            </p>
-
-            <div className="root-cause-bottom">
-              <span>
-                Confidence: {result.confidence || "Not provided"}
-              </span>
-
-              <span>
-                Runbook: {result.runbook || "Not specified"}
-              </span>
-            </div>
-
-          </div>
-
-          <div className="result-section">
-
-            <div className="result-section-heading">
-              <div>
-                <h3>
-                  <Search size={18} />
-                  Similar Historical Incidents
-                </h3>
-
-                <p>
-                  Previously recorded incidents relevant
-                  to this investigation.
-                </p>
-              </div>
-
-              <span className="count-badge">
-                {similarIncidents.length} matches
-              </span>
-            </div>
-
-            {similarIncidents.length > 0 ? (
-              similarIncidents.map((incident, index) => (
-                <div
-                  className="similar-incident-card"
-                  key={incident.id || index}
-                >
-                  <div className="similar-incident-top">
-                    <strong>
-                      {incident.id || incident.incident_id || `Match ${index + 1}`}
-                    </strong>
-
-                    <span>
-                      {incident.service || "Historical incident"}
-                    </span>
-                  </div>
+          {liveAnalysis ? (
+            <div className="result-section live-analysis-card">
+              <div className="result-section-heading">
+                <div>
+                  <h3>
+                    <CheckCircle2 size={18} />
+                    Complete AI Investigation Report
+                  </h3>
 
                   <p>
-                    {incident.root_cause || incident.text || "Historical incident details retrieved."}
+                    Generated using historical incident knowledge
+                    and AI analysis.
                   </p>
-
-                  <div className="fix-comparison">
-
-                    <div className="fix-success">
-                      <CheckCircle2 size={17} />
-                      <div>
-                        <strong>Successful fix</strong>
-                        <p>
-                          {incident.fix_worked || "No successful fix recorded."}
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="fix-failed">
-                      <XCircle size={17} />
-                      <div>
-                        <strong>Failed attempts</strong>
-                        <p>
-                          {Array.isArray(incident.fixes_failed)
-                            ? incident.fixes_failed.join("; ")
-                            : incident.fixes_failed || "No failed attempts recorded."}
-                        </p>
-                      </div>
-                    </div>
-
-                  </div>
                 </div>
-              ))
-            ) : (
-              <p className="empty-state">
-                No similar historical incidents were returned.
-              </p>
-            )}
+              </div>
 
-          </div>
-
-          <div className="result-section recommendations-card">
-
-            <div className="result-section-heading">
-              <div>
-                <h3>
-                  <CheckCircle2 size={18} />
-                  Recommended Resolution Steps
-                </h3>
-
-                <p>
-                  Review these steps before making
-                  production changes.
-                </p>
+              <div className="markdown-report">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                  {liveAnalysis}
+                </ReactMarkdown>
               </div>
             </div>
+          ) : (
+            <>
+              <div className="root-cause-card">
+                <div className="root-cause-top">
+                  <div className="form-icon">
+                    <ShieldAlert size={22} />
+                  </div>
 
-            {recommendations.length > 0 ? (
-              <div className="recommendation-list">
-                {recommendations.map((step, index) => (
-                  <div className="recommendation-item" key={index}>
-                    <span>{index + 1}</span>
+                  <span className="severity critical">
+                    {result.severity || severity}
+                  </span>
+                </div>
+
+                <span className="result-label">
+                  PROBABLE ROOT CAUSE
+                </span>
+
+                <h3>{result.root_cause || "Analysis completed"}</h3>
+
+                <p>{result.explanation || "No explanation returned."}</p>
+
+                <div className="root-cause-bottom">
+                  <span>
+                    Confidence: {result.confidence || "Not provided"}
+                  </span>
+                </div>
+              </div>
+
+              <div className="result-section recommendations-card">
+                <div className="result-section-heading">
+                  <div>
+                    <h3>
+                      <CheckCircle2 size={18} />
+                      Recommended Resolution Steps
+                    </h3>
+
                     <p>
-                      {typeof step === "string"
-                        ? step
-                        : step.description || step.action || JSON.stringify(step)}
+                      Review these steps before making production
+                      changes.
                     </p>
                   </div>
-                ))}
+                </div>
+
+                {result.recommendations?.length > 0 ? (
+                  <div className="recommendation-list">
+                    {result.recommendations.map((step, index) => (
+                      <div className="recommendation-item" key={index}>
+                        <span>{index + 1}</span>
+                        <p>{step}</p>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="empty-state">
+                    No recommendations returned.
+                  </p>
+                )}
               </div>
-            ) : (
-              <p className="empty-state">
-                No recommendations returned.
-              </p>
-            )}
+            </>
+          )}
 
-            <div className="safety-notice">
-              <ShieldAlert size={18} />
-              <p>
-                Recommendations require engineer review.
-                Verify system capacity and operational
-                safety before executing any production changes.
-              </p>
-            </div>
-
+          <div className="safety-notice">
+            <ShieldAlert size={18} />
+            <p>
+              AI recommendations require engineer review. Verify
+              system capacity and operational safety before
+              executing production changes.
+            </p>
           </div>
-
         </div>
       )}
-
     </div>
   );
 }
